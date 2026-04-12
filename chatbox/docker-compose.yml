@@ -1,0 +1,44 @@
+version: '3.9'
+
+services:
+
+  # ── Chatbox (Python server) ──────────────────────────────────────────────────
+  chatbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.chatbox
+    container_name: sprintlab_chatbox
+    ports:
+      - "8080:8080"
+    environment:
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - GITLAB_PROJECT_ID=${GITLAB_PROJECT_ID:-80767095}
+      - OLLAMA_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # acesso ao Ollama no host
+    restart: unless-stopped
+    volumes:
+      - ./chatbox.html:/app/chatbox.html       # hot-reload do HTML
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Middleware Express (SprintLab principal) ──────────────────────────────────
+  middleware:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sprintlab_middleware
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - PORT=3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/tabs/main.html', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

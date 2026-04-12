@@ -1,0 +1,22 @@
+# ── SprintLab TFC Chatbox ─────────────────────────────────────────────────────
+# Servidor Python que serve o chatbox.html e faz proxy para o Ollama local
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copiar ficheiros necessários
+COPY server.py .
+COPY chatbox.html .
+
+# Porta exposta
+EXPOSE 8080
+
+# Variáveis de ambiente configuráveis
+ENV GITLAB_TOKEN=SEU_TOKEN_AQUI
+ENV GITLAB_PROJECT_ID=80767095
+ENV OLLAMA_HOST=host.docker.internal
+ENV PORT=8080
+
+CMD ["python", "server.py"]
