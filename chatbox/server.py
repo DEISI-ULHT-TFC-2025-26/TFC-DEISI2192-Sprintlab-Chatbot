@@ -8,44 +8,42 @@ from datetime import datetime, timezone
 
 NGROK_URL = "https://unglamourously-hypoxic-jaylah.ngrok-free.dev"
 
-# GitLab config — substitui SEU_TOKEN_AQUI pelo teu token glpat-...
 GITLAB_TOKEN = "glpat-1DkPD2ghY1LOXmQyxB6nZGM6MQpvOjEKdTppcWU1OA8.01.1707f314u"
 GITLAB_PROJECT_ID = "80767095"
 GITLAB_BASE = "https://gitlab.com/api/v4"
 
-DOCUMENT_CONTEXT = """
-=== DOCUMENTO: RELATÓRIO INTERCALAR TFC — SprintLab ===
-Autor: Bernardo Gouveia | Orientador: Daniel Silveira | LEI | Universidade Lusófona | 29/11/2025
+DOCUMENT_CONTEXT = """=== RELATÓRIO INTERCALAR TFC — SprintLab ===
+Autor: Bernardo Gouveia | Orientador: Daniel Silveira | LEI | Universidade Lusófona | 2025/2026
 
-O SprintLab é um middleware e plugin para Microsoft Teams que integra o GitLab, com sincronização bidirecional de issues, tarefas, labels, gráficos e eventos, com quadros Kanban e gráficos de Gantt diretamente no Teams.
+DESCRIÇÃO: O SprintLab é um middleware e plugin para Microsoft Teams que integra o GitLab com sincronização bidirecional de issues, Kanban, Gantt e IA conversacional local.
 
-NOVOS OBJETIVOS DE IA:
-1. IA Chatbox: interação por linguagem natural para consulta, criação e atualização de tarefas.
-2. Geração automática de relatórios via IA: sumários de sprint, métricas, evolução de tarefas.
+PROBLEMA: Falta de integração entre GitLab e Microsoft Teams gera processos fragmentados, duplicação de tarefas e perda de eficiência. Parceiro: GMV.
 
-IDENTIFICAÇÃO DO PROBLEMA:
-- Falta de visibilidade: atualizações no GitLab não refletidas em tempo real no Teams.
-- Duplicação de esforços: atualização manual em plataformas diferentes.
-- Parceiro empresarial: GMV.
+SOLUÇÃO: Middleware Express.js + plugin Teams + chatbox IA com qwen2.5:7b via Ollama (local, sem cloud).
 
-TECNOLOGIAS: Express.js, Microsoft Teams API, GitLab API, IA Chatbox (qwen2.5:7b via Ollama).
+TECNOLOGIAS: Express.js (middleware), Microsoft Teams API (plugin), GitLab API (webhooks/issues), Ollama qwen2.5:7b (IA local), PostgreSQL (configurações), Docker, ngrok.
 
-BENCHMARKING: SprintLab exclusivo: Chatbox IA, Sincronização bidirecional GitLab-Teams, Relatórios automáticos IA, NLP.
+BENCHMARKING: SprintLab é o único com Chatbox IA + NLP + Sincronização bidirecional GitLab↔Teams + Relatórios automáticos IA.
 
-VIABILIDADE: 85% melhoraria eficiência, 70% Kanban+Gantt essenciais, 90% interesse em automação. Modelo SaaS.
+VIABILIDADE: 85% melhoraria eficiência, 70% Kanban+Gantt essenciais, 90% interesse em automação. Redução de 40% em tarefas administrativas. Modelo SaaS.
 
-GLOSSÁRIO: LEI=Licenciatura Eng. Informática, TFC=Trabalho Final de Curso, SaaS=Software as a Service, NLP=Natural Language Processing.
-"""
+FUNCIONALIDADES IA: (1) Chatbox NLP — criar/fechar/atualizar issues, queries analíticas, exportar CSV. (2) Relatórios automáticos de sprint. (3) Motor IA↔GitLab↔Teams.
 
-SYSTEM_PROMPT = f"""És o assistente do projeto TFC SprintLab da Universidade Lusófona, desenvolvido por Bernardo Gouveia.
-Tens acesso ao documento oficial do projeto e aos dados em tempo real do repositório GitLab, incluindo análises pré-calculadas.
-Responde SEMPRE em português de Portugal. Sê direto, claro e útil.
-Usa os dados de análise fornecidos para responder com precisão. Não inventes dados.
+GLOSSÁRIO: LEI=Licenciatura Eng. Informática, TFC=Trabalho Final de Curso, SaaS=Software as a Service, NLP=Natural Language Processing."""
 
-{DOCUMENT_CONTEXT}
-"""
+SYSTEM_PROMPT = """És o assistente do projeto TFC SprintLab da Universidade Lusófona, desenvolvido por Bernardo Gouveia.
+Responde SEMPRE em português de Portugal. Sê direto, claro e conciso.
+Usa os dados fornecidos. Não inventes informação.
+Quando tiveres dados do GitLab, usa-os para responder com precisão.
+Para ações (criar/fechar issues), confirma o que foi feito de forma clara."""
 
-# ── GitLab helpers ────────────────────────────────────────────────────────────
+GITLAB_KEYWORDS = [
+    'issue', 'issues','assignee', 'milestone',
+    'progresso', 'atraso', 'fechad', 'abert', 'label',
+    'taref', 'gitlab', 'commit', 'merge', 'board',
+    'quantas', 'quem', 'lista', 'resumo', 'estado', 'projeto'
+]
+
 def gitlab_request(method, endpoint, body=None, params=None):
     url = f"{GITLAB_BASE}{endpoint}"
     if params:
@@ -60,139 +58,64 @@ def get_all_issues(state="all"):
     return gitlab_request("GET", f"/projects/{GITLAB_PROJECT_ID}/issues",
                           params={"state": state, "per_page": 100})
 
-def analyse_issues(issues):
-    """Análise pré-calculada dos dados para enriquecer o contexto do modelo."""
-    now = datetime.now(timezone.utc)
-
-    # Contagens base
-    total = len(issues)
-    opened = [i for i in issues if i['state'] == 'opened']
-    closed = [i for i in issues if i['state'] == 'closed']
-
-    # Issues em atraso (due_date < hoje e ainda abertas)
-    overdue = []
-    for i in opened:
-        if i.get('due_date'):
-            due = datetime.fromisoformat(i['due_date'])
-            if due.replace(tzinfo=timezone.utc) < now:
-                overdue.append(i)
-
-    # Issues sem assignee
-    no_assignee = [i for i in opened if not i.get('assignee')]
-
-    # Issues por assignee
-    by_assignee = {}
-    for i in opened:
-        name = i['assignee']['name'] if i.get('assignee') else 'Sem assignee'
-        by_assignee[name] = by_assignee.get(name, 0) + 1
-    by_assignee_sorted = sorted(by_assignee.items(), key=lambda x: x[1], reverse=True)
-
-    # Issues por label
-    by_label = {}
-    for i in opened:
-        for label in i.get('labels', []) or ['Sem label']:
-            by_label[label] = by_label.get(label, 0) + 1
-    by_label_sorted = sorted(by_label.items(), key=lambda x: x[1], reverse=True)
-
-    # Issue mais antiga (aberta)
-    oldest = None
-    if opened:
-        oldest = min(opened, key=lambda i: i['created_at'])
-
-    # Issue mais recente (aberta)
-    newest = None
-    if opened:
-        newest = max(opened, key=lambda i: i['created_at'])
-
-    # Progresso geral
-    progress = round((len(closed) / total * 100), 1) if total > 0 else 0
-
-    return {
-        "total": total,
-        "abertas": len(opened),
-        "fechadas": len(closed),
-        "progresso": f"{progress}%",
-        "em_atraso": len(overdue),
-        "sem_assignee": len(no_assignee),
-        "por_assignee": by_assignee_sorted,
-        "por_label": by_label_sorted[:5],
-        "mais_antiga": f"#{oldest['iid']} '{oldest['title']}' (criada em {oldest['created_at'][:10]})" if oldest else "N/A",
-        "mais_recente": f"#{newest['iid']} '{newest['title']}' (criada em {newest['created_at'][:10]})" if newest else "N/A",
-        "overdue_list": [f"#{i['iid']} {i['title']} (due: {i['due_date']})" for i in overdue[:5]],
-        "no_assignee_list": [f"#{i['iid']} {i['title']}" for i in no_assignee[:5]],
-    }
-
 def get_gitlab_context():
     try:
         all_issues = get_all_issues("all")
-        opened_issues = [i for i in all_issues if i['state'] == 'opened']
-        analysis = analyse_issues(all_issues)
+        opened = [i for i in all_issues if i['state'] == 'opened']
+        closed  = [i for i in all_issues if i['state'] == 'closed']
+        now = datetime.now(timezone.utc)
 
-        milestones = gitlab_request("GET", f"/projects/{GITLAB_PROJECT_ID}/milestones",
-                                    params={"state": "active"})
-        milestones_text = "\n".join([
-            f"  - {m['title']} (due: {m.get('due_date') or 'Sem data'})"
-            for m in milestones
-        ]) or "  Nenhum milestone ativo."
+        overdue = [i for i in opened if i.get('due_date') and
+                   datetime.fromisoformat(i['due_date']).replace(tzinfo=timezone.utc) < now]
 
-        issues_text = "\n".join([
-            f"  #{i['iid']} [{i['state']}] {i['title']} | assignee: {i['assignee']['name'] if i.get('assignee') else 'Nenhum'} | due: {i.get('due_date') or 'N/A'} | labels: {', '.join(i.get('labels', [])) or 'Nenhuma'}"
-            for i in opened_issues
+        by_assignee = {}
+        for i in opened:
+            name = i['assignee']['name'] if i.get('assignee') else 'Sem assignee'
+            by_assignee[name] = by_assignee.get(name, 0) + 1
+
+        progress = round(len(closed) / len(all_issues) * 100, 1) if all_issues else 0
+
+        issues_list = "\n".join([
+            f"  #{i['iid']} {i['title']} | {i['assignee']['name'] if i.get('assignee') else 'Nenhum'} | due:{i.get('due_date') or 'N/A'} | {','.join(i.get('labels',[])[:2]) or 'sem label'}"
+            for i in opened[:20]
         ]) or "  Nenhuma issue aberta."
 
-        assignee_text = "\n".join([f"  {name}: {count} issues" for name, count in analysis['por_assignee']])
-        label_text = "\n".join([f"  {label}: {count} issues" for label, count in analysis['por_label']])
-        overdue_text = "\n".join([f"  {i}" for i in analysis['overdue_list']]) or "  Nenhuma em atraso."
-        no_assignee_text = "\n".join([f"  {i}" for i in analysis['no_assignee_list']]) or "  Todas têm assignee."
+        assignee_rank = "\n".join([f"  {n}: {c}" for n,c in sorted(by_assignee.items(), key=lambda x:-x[1])])
+        overdue_list  = "\n".join([f"  #{i['iid']} {i['title']} (due:{i['due_date']})" for i in overdue[:5]]) or "  Nenhuma."
+
+        milestones = gitlab_request("GET", f"/projects/{GITLAB_PROJECT_ID}/milestones", params={"state":"active"})
+        ms_list = "\n".join([f"  {m['title']} (due:{m.get('due_date','N/A')})" for m in milestones]) or "  Nenhum."
 
         return f"""
-=== DADOS ATUAIS DO GITLAB (projeto {GITLAB_PROJECT_ID}) ===
+=== DADOS GITLAB (tempo real) ===
+Total: {len(all_issues)} | Abertas: {len(opened)} | Fechadas: {len(closed)} | Progresso: {progress}%
+Em atraso: {len(overdue)} | Sem assignee: {sum(1 for i in opened if not i.get('assignee'))}
 
-RESUMO:
-  Total de issues: {analysis['total']}
-  Abertas: {analysis['abertas']} | Fechadas: {analysis['fechadas']}
-  Progresso geral: {analysis['progresso']}
-  Em atraso: {analysis['em_atraso']}
-  Sem assignee: {analysis['sem_assignee']}
-  Issue mais antiga: {analysis['mais_antiga']}
-  Issue mais recente: {analysis['mais_recente']}
+ISSUES ABERTAS:
+{issues_list}
 
-ISSUES POR ASSIGNEE:
-{assignee_text or '  Nenhum assignee.'}
+RANKING ASSIGNEES:
+{assignee_rank or '  Nenhum.'}
 
-ISSUES POR LABEL:
-{label_text or '  Nenhuma label.'}
+EM ATRASO:
+{overdue_list}
 
-ISSUES EM ATRASO:
-{overdue_text}
-
-ISSUES SEM ASSIGNEE:
-{no_assignee_text}
-
-MILESTONES ATIVOS:
-{milestones_text}
-
-LISTA DE ISSUES ABERTAS:
-{issues_text}
-"""
+MILESTONES:
+{ms_list}"""
     except Exception as e:
-        return f"\n=== GITLAB: Erro ao carregar dados: {str(e)} ===\n"
+        return f"\n=== GITLAB: erro ao carregar ({e}) ===\n"
 
 def issues_to_csv(issues):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID", "Título", "Estado", "Assignee", "Labels", "Due Date", "Criada em", "URL"])
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["ID","Título","Estado","Assignee","Labels","Due Date","Criada em","URL"])
     for i in issues:
-        writer.writerow([
-            f"#{i['iid']}", i['title'], i['state'],
-            i['assignee']['name'] if i.get('assignee') else '',
-            ', '.join(i.get('labels', [])),
-            i.get('due_date') or '',
-            i['created_at'][:10], i['web_url']
-        ])
-    return output.getvalue()
+        w.writerow([f"#{i['iid']}", i['title'], i['state'],
+                    i['assignee']['name'] if i.get('assignee') else '',
+                    ','.join(i.get('labels',[])), i.get('due_date',''),
+                    i['created_at'][:10], i['web_url']])
+    return out.getvalue()
 
-# ── HTTP Handler ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self):
@@ -226,13 +149,11 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith('/gitlab/export'):
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             state = params.get('state', ['all'])[0]
-            print(f"\n{'='*50}")
-            print(f"📤 EXPORTAR ISSUES (state={state})")
+            print(f"\n📤 EXPORTAR CSV (state={state})")
             try:
                 issues = get_all_issues(state)
                 csv_data = issues_to_csv(issues)
                 print(f"   ✅ {len(issues)} issues exportadas")
-                print(f"{'='*50}")
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
                 self.send_header('Content-Disposition', 'attachment; filename="gitlab_issues.csv"')
@@ -254,98 +175,117 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/gitlab/issues':
             try:
                 data = json.loads(body)
-                print(f"\n{'='*50}")
-                print(f"🆕 CRIAR ISSUE: {data.get('title', '?')}")
+                print(f"\n🆕 CRIAR ISSUE: {data.get('title')}")
                 result = gitlab_request("POST", f"/projects/{GITLAB_PROJECT_ID}/issues", body=data)
-                print(f"   ✅ Issue #{result['iid']} criada: {result['title']}")
-                print(f"   🔗 {result['web_url']}")
-                print(f"{'='*50}")
+                print(f"   ✅ #{result['iid']} criada — {result['web_url']}")
                 self._json(result)
             except Exception as e:
-                print(f"   ❌ Erro: {e}")
-                self._error(str(e))
+                print(f"   ❌ {e}"); self._error(str(e))
 
         elif self.path.startswith('/gitlab/issues/') and self.path.endswith('/close'):
             try:
                 iid = self.path.split('/')[3]
-                print(f"\n{'='*50}")
-                print(f"🔒 FECHAR ISSUE #{iid}")
+                print(f"\n🔒 FECHAR ISSUE #{iid}")
                 result = gitlab_request("PUT", f"/projects/{GITLAB_PROJECT_ID}/issues/{iid}",
                                         body={"state_event": "close"})
-                print(f"   ✅ Issue #{iid} fechada: {result['title']}")
-                print(f"{'='*50}")
+                print(f"   ✅ #{iid} fechada")
                 self._json(result)
             except Exception as e:
-                print(f"   ❌ Erro: {e}")
-                self._error(str(e))
+                print(f"   ❌ {e}"); self._error(str(e))
 
         elif self.path.startswith('/gitlab/issues/') and self.path.endswith('/update'):
             try:
                 iid = self.path.split('/')[3]
                 data = json.loads(body)
-                print(f"\n{'='*50}")
-                print(f"✏️  ATUALIZAR ISSUE #{iid}: {data}")
+                print(f"\n✏️  ATUALIZAR ISSUE #{iid}: {data}")
                 result = gitlab_request("PUT", f"/projects/{GITLAB_PROJECT_ID}/issues/{iid}", body=data)
-                print(f"   ✅ Issue #{iid} atualizada")
-                print(f"{'='*50}")
+                print(f"   ✅ #{iid} atualizada")
                 self._json(result)
             except Exception as e:
-                print(f"   ❌ Erro: {e}")
-                self._error(str(e))
+                print(f"   ❌ {e}"); self._error(str(e))
 
-        elif self.path == '/api/generate':
+        elif self.path == '/api/chat':
             try:
                 data = json.loads(body)
-                user_prompt = data.get('prompt', '').split('Utilizador:')[-1].split('Assistente:')[0].strip()
-                print(f"\n{'='*50}")
-                print(f"💬 PERGUNTA: {user_prompt[:120]}")
-                print(f"   \U0001f4ac Pergunta sobre: {user_prompt[:60]}")
+                messages = data.get('messages', [])
+                last_user = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
 
-                # Detecao inteligente: so vai ao GitLab se necessario
-                gitlab_keywords = [
-                    "issue", "issues", "sprint", "assignee", "milestone",
-                    "progresso", "atraso", "fechad", "abert", "label",
-                    "taref", "gitlab", "commit", "merge", "board",
-                    "quantas", "quem", "lista", "resumo", "estado"
-                ]
-                needs_gitlab = any(kw in user_prompt.lower() for kw in gitlab_keywords)
+                print(f"\n{'='*50}")
+                print(f"💬 PERGUNTA: {last_user[:100]}")
+
+                needs_gitlab = any(kw in last_user.lower() for kw in GITLAB_KEYWORDS)
 
                 if needs_gitlab:
-                    print(f"   \U0001f98a Pergunta sobre GitLab - a buscar dados...")
+                    print(f"   🦊 A buscar dados do GitLab...")
                     gitlab_ctx = get_gitlab_context()
-                    print(f"   \U0001f98a GitLab: {len(gitlab_ctx)} chars carregados")
+                    print(f"   🦊 GitLab: {len(gitlab_ctx)} chars")
+                    system_content = SYSTEM_PROMPT + "\n\n" + DOCUMENT_CONTEXT + "\n" + gitlab_ctx
                 else:
                     gitlab_ctx = ""
-                    print(f"   \U0001f4c4 Pergunta sobre documento TFC - sem GitLab (~{len(SYSTEM_PROMPT)} chars)")
+                    print(f"   📄 Apenas documento TFC")
+                    system_content = SYSTEM_PROMPT + "\n\n" + DOCUMENT_CONTEXT
 
-                original_prompt = data.get("prompt", "")
-                data["prompt"] = SYSTEM_PROMPT + gitlab_ctx + "\n\n" + original_prompt
-                print(f"   \U0001f4e4 Prompt total: {len(data['prompt'])} chars -> Ollama")
+                ollama_payload = {
+                    "model": data.get('model', 'qwen2.5:7b'),
+                    "messages": [
+                        {"role": "system", "content": system_content},
+                        *messages
+                    ],
+                    "stream": True,
+                    "options": {
+                        "temperature": 0.3,
+                        "num_ctx": 4096,
+                        "top_p": 0.9
+                    }
+                }
+
+                print(f"   📤 Prompt: {len(system_content)} chars → Ollama (stream)")
 
                 req = urllib.request.Request(
-                    'http://localhost:11434/api/generate',
-                    data=json.dumps(data).encode(),
+                    'http://localhost:11434/api/chat',
+                    data=json.dumps(ollama_payload).encode(),
                     headers={'Content-Type': 'application/json'},
                     method='POST'
                 )
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    resp = r.read()
-
-                response_data = json.loads(resp)
-                reply = response_data.get('response', '')
-                print(f"   📥 Resposta ({len(reply)} chars): {reply[:100]}...")
-                print(f"   ⏱️  Tempo: {response_data.get('total_duration', 0) // 1_000_000}ms")
-                print(f"{'='*50}")
 
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('X-Accel-Buffering', 'no')
                 self.send_cors_headers()
                 self.end_headers()
-                self.wfile.write(resp)
+
+                total_chars = 0
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    for line in r:
+                        if line:
+                            try:
+                                chunk = json.loads(line.decode('utf-8'))
+                                content = chunk.get('message', {}).get('content', '')
+                                if content:
+                                    total_chars += len(content)
+                                    event = json.dumps({"content": content, "done": False})
+                                    self.wfile.write(f"data: {event}\n\n".encode())
+                                    self.wfile.flush()
+                                if chunk.get('done'):
+                                    done_event = json.dumps({"content": "", "done": True,
+                                        "duration": chunk.get('total_duration', 0) // 1_000_000})
+                                    self.wfile.write(f"data: {done_event}\n\n".encode())
+                                    self.wfile.flush()
+                                    ms = chunk.get('total_duration', 0) // 1_000_000
+                                    print(f"   📥 Resposta: {total_chars} chars em {ms}ms")
+                                    print(f"{'='*50}")
+                            except:
+                                pass
 
             except Exception as e:
                 print(f"   ❌ Erro: {e}")
-                self._error(str(e))
+                try:
+                    err = json.dumps({"content": f"Erro: {e}", "done": True})
+                    self.wfile.write(f"data: {err}\n\n".encode())
+                    self.wfile.flush()
+                except:
+                    pass
         else:
             self.send_response(404)
             self.end_headers()
@@ -372,7 +312,8 @@ if __name__ == '__main__':
     print(f"\n{'='*50}")
     print(f"✅ Servidor a correr em http://localhost:{port}")
     print(f"🌍 Público em {NGROK_URL}")
-    print(f"📄 Documento carregado ({len(DOCUMENT_CONTEXT)} caracteres)")
+    print(f"📄 Documento TFC: {len(DOCUMENT_CONTEXT)} chars")
     print(f"🦊 GitLab project: {GITLAB_PROJECT_ID}")
+    print(f"⚡ Streaming activado — /api/chat")
     print(f"{'='*50}\n")
     HTTPServer(('', port), Handler).serve_forever()
