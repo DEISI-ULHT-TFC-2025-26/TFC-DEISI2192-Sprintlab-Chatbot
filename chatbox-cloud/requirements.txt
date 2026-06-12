@@ -1,0 +1,8 @@
+# SprintLab TFC Chatbox (cloud) — Python runtime dependencies.
+#
+# This server uses only the standard library: it talks to Groq's REST API
+# (OpenAI-compatible) and the GitLab API via urllib, so there are no external
+# dependencies. Intentionally empty.
+#
+# When adding a dependency, pin the exact version for reproducible builds:
+#   httpx==0.27.0

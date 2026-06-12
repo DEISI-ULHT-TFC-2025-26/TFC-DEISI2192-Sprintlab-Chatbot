@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TFC Chatbox</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Sidebar esquerda: projetos/workspaces (cada GitLab = um chat) ── -->
+    <aside class="sidebar-left" id="sidebar-left">
+      <div class="sb-title">Projetos</div>
+      <nav class="ws-list" id="ws-list" aria-label="Projetos GitLab"></nav>
+      <button type="button" class="ws-add" id="ws-add">
+        <i class="fas fa-plus"></i> Adicionar GitLab
+      </button>
+      <!-- Cópia de segurança: workspaces + históricos vivem no localStorage
+           (perdem-se ao trocar de browser) — exportar/importar resolve isso. -->
+      <div class="sb-foot">
+        <button type="button" class="sb-tool" id="ws-backup" title="Exportar cópia de segurança (workspaces + conversas)">
+          <i class="fas fa-download"></i> Backup
+        </button>
+        <button type="button" class="sb-tool" id="ws-restore" title="Importar cópia de segurança">
+          <i class="fas fa-upload"></i> Repor
+        </button>
+        <input type="file" id="ws-restore-file" accept=".json,application/json" hidden>
+      </div>
+    </aside>
+
+    <!-- ── Coluna central: o chat ── -->
+    <main class="chat-col">
+      <div class="header">
+        <button class="icon-btn sb-toggle-left" id="toggle-left" aria-label="Mostrar projetos">
+          <i class="fas fa-bars"></i>
+        </button>
+        <div class="header-icon"><i class="fas fa-robot"></i></div>
+        <div class="header-meta">
+          <div class="header-title" id="ws-title">SprintLab</div>
+          <div class="header-sub" id="ws-sub">GitLab predefinido</div>
+        </div>
+        <div class="model-badge">
+          <div class="status-dot" id="status-dot"></div>
+          <span id="model-label">Llama 3.3 70B</span>
+        </div>
+        <button class="gear-btn" id="gear-btn" aria-label="Definições" title="Definições">
+          <i class="fas fa-gear"></i>
+        </button>
+        <button class="icon-btn sb-toggle-right" id="toggle-right" aria-label="Mostrar estatísticas">
+          <i class="fas fa-chart-column"></i>
+        </button>
+      </div>
+
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <div class="welcome-icon"><i class="fas fa-comments"></i></div>
+          <h3>Olá! Sou o teu assistente GitLab.</h3>
+          <p>Pergunta sobre o projeto, pede um gráfico ou o relatório do projeto, investiga quem mexeu no código, ou gere issues — tudo em linguagem natural.</p>
+          <div class="suggestions">
+            <button type="button" class="chip chip-feature" onclick="useSuggestion(this)">📊 Relatório do projeto</button>
+            <button type="button" class="chip chip-invest" onclick="useSuggestion(this)">🔍 Quem alterou o README.md?</button>
+            <button type="button" class="chip chip-commit" onclick="useSuggestion(this)">💾 Cria um exemplo e faz commit</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">O que é este projeto?</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">Quantas issues estão abertas?</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">Quem tem mais commits?</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">Gráfico de issues por assignee</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">Burndown dos últimos 14 dias</button>
+            <button type="button" class="chip" onclick="useSuggestion(this)">Exporta os commits para CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="followups" id="followups" aria-label="Sugestões de seguimento"></div>
+
+      <div class="input-bar">
+        <div class="input-wrap">
+          <textarea id="input" placeholder="Escreve a tua pergunta..." rows="1"
+            onkeydown="handleKey(event)" oninput="resize(this)"
+            aria-label="Escreve a tua pergunta"></textarea>
+        </div>
+        <button class="send-btn" id="send-btn" onclick="send()" aria-label="Enviar">
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </main>
+
+    <!-- ── Sidebar direita: estatísticas do projeto ativo ── -->
+    <aside class="sidebar-right" id="sidebar-right">
+      <div class="sb-title">Estatísticas
+        <button class="icon-btn" id="stats-refresh" aria-label="Atualizar estatísticas" title="Atualizar">
+          <i class="fas fa-rotate"></i>
+        </button>
+      </div>
+      <div class="stats-body" id="stats-body">
+        <div class="stats-empty">A carregar…</div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ── Modal: adicionar/editar um GitLab (workspace) ── -->
+  <div class="settings-overlay" id="ws-overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-label="GitLab">
+      <div class="settings-head">
+        <span id="ws-editor-title">Adicionar GitLab</span>
+        <button class="settings-close" id="ws-close" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="settings-section">
+        <label class="settings-field">Nome (opcional)
+          <input id="ws-name" type="text" class="settings-input" placeholder="ex.: AIR demo" />
+        </label>
+        <label class="settings-field">URL da instância (vazio = gitlab.com)
+          <input id="ws-base" type="text" class="settings-input" placeholder="https://git-ext.gmv.com" />
+        </label>
+        <label class="settings-field">Token de acesso (scope <code>api</code>)
+          <input id="ws-token" type="password" class="settings-input" placeholder="glpat-..." />
+        </label>
+        <label class="settings-field">Project ID
+          <input id="ws-project" type="text" class="settings-input" placeholder="ex.: 83069942" />
+        </label>
+        <div class="settings-testrow">
+          <button class="settings-test" id="ws-test">Testar ligação</button>
+          <span class="settings-test-result" id="ws-test-result"></span>
+        </div>
+        <p class="settings-hint">⚠️ Num servidor público, o token é enviado para o servidor — usa um token limitado ou corre o chatbot localmente.</p>
+      </div>
+      <div class="settings-actions">
+        <button class="settings-save" id="ws-save">Guardar</button>
+        <button class="settings-cancel" id="ws-cancel">Cancelar</button>
+        <button class="settings-cancel danger-text" id="ws-delete" hidden>Apagar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal: definições globais (modelo + aparência) ── -->
+  <div class="settings-overlay" id="settings-overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-label="Definições">
+      <div class="settings-head">
+        <span>Definições</span>
+        <button class="settings-close" id="settings-close" aria-label="Fechar">&times;</button>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title"><i class="fas fa-microchip"></i> Modelo</div>
+        <select id="set-model" class="settings-input">
+          <option value="llama-3.3-70b-versatile" data-desc="Meta · 70B · ~250 tok/s. Generalista forte: tool calling fiável, bom português. **Recomendado** para o dia-a-dia.">Llama 3.3 70B (recomendado)</option>
+          <option value="llama-3.1-8b-instant" data-desc="Meta · 8B · ~750 tok/s. O mais rápido e com o maior limite diário grátis (14.4K req/dia). Útil para demos; tool calling menos fiável que o 70B.">Llama 3.1 8B (rápido)</option>
+          <option value="qwen/qwen3-32b" data-desc="Alibaba · 32B · ~400 tok/s. Modelo com modo de raciocínio (desligado por defeito). Bom para perguntas analíticas / multi-passo.">Qwen3 32B (raciocínio)</option>
+          <option value="openai/gpt-oss-120b" data-desc="OpenAI (open-weight) · 120B MoE · ~500 tok/s. O maior aqui — respostas mais detalhadas e tool calling muito bom. Ideal para queries complexas.">GPT-OSS 120B (grande)</option>
+          <option value="moonshotai/kimi-k2-instruct-0905" data-desc="Moonshot AI · 1T (MoE) · 256K contexto. Considerado um dos melhores open-source para tool calling. Excelente para fluxos de agente.">Kimi K2 (agentic)</option>
+        </select>
+        <div class="settings-modeldesc" id="set-model-desc"></div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title"><i class="fas fa-palette"></i> Aparência</div>
+        <select id="set-theme" class="settings-input">
+          <option value="dark">Escuro</option>
+          <option value="light">Claro</option>
+          <option value="black">Preto (OLED)</option>
+        </select>
+      </div>
+
+      <div class="settings-actions">
+        <button class="settings-save" id="set-save">Guardar</button>
+        <button class="settings-cancel" id="set-cancel">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
