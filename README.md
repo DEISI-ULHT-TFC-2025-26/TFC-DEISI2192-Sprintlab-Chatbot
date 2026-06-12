@@ -1,259 +1,117 @@
-# SprintLab — TFC Chatbox
-
-Assistente IA local integrado com GitLab e Microsoft Teams, desenvolvido por **Bernardo Gouveia** para o TFC da Universidade Lusófona (LEI).
-
 ---
+title: SprintLab TFC Chatbox
+emoji: 🤖
+colorFrom: purple
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+# SprintLab TFC Chatbox — Cloud edition (Groq + Hugging Face Spaces)
+
+Assistente IA do TFC **SprintLab** (Bernardo Gouveia, LEI, Universidade Lusófona).
+Esta versão corre **inteiramente na cloud, grátis**: o `server.py` num Hugging Face
+Docker Space e a inferência no **Groq** (`llama-3.3-70b-versatile`, com function
+calling para criar/fechar/atualizar issues por linguagem natural). Sem Ollama local, sem
+tunnel, sem portátil — URL público e estável (`https://<user>-<space>.hf.space`).
 
 ## Arquitetura
 
 ```
-Microsoft Teams (tab chatbox)
-        ↓  HTTPS
-  ngrok tunnel (:443 → :8080)
-        ↓
-  server.py  (:8080)
-  ├── GET  /chatbox.html          → serve a interface
-  ├── POST /api/chat              → proxy streaming → Ollama
-  ├── POST /gitlab/issues         → criar issue
-  ├── POST /gitlab/issues/:id/close   → fechar issue
-  ├── POST /gitlab/issues/:id/update  → atualizar issue
-  └── GET  /gitlab/export         → exportar CSV
-        ↓                    ↓
-  Ollama qwen2.5:7b       GitLab API
-     (:11434)             (gitlab.com/api/v4)
+Microsoft Teams (tab)
+        ↓  (iframe, URL estável *.hf.space)
+  Hugging Face Space  →  server.py (proxy + GitLab + charts)
+        ↓                      ↓
+   Groq API              GitLab API
+ (llama-3.3-70b)        (issues, MRs, commits)
 ```
 
----
+## Estrutura do código
 
-## Pré-requisitos
+| Ficheiro | Responsabilidade |
+|---|---|
+| `server.py` | Entrypoint HTTP: rotas, streaming SSE do chat, rate-limit |
+| `config.py` | Configuração env-driven (fail-fast) + prompts |
+| `gitlab_api.py` | Cliente GitLab: cache TTL, multi-tenant, fetchers |
+| `analytics.py` | Estatísticas, contexto do LLM, exports CSV |
+| `report.py` | Relatório do projeto (determinístico) |
+| `charts.py` | Dados Chart.js dos gráficos inline |
+| `blame.py` | Investigação de código (git blame + diff + análise IA) |
+| `code_commit.py` | Commit por IA: plano → confirmação → branch `ai/*` + commit + MR |
+| `actions.py` | Escritas no GitLab (validação + executor único) |
+| `llm.py` | Cliente Groq (modelos, parsing) |
+| `chatbox.html` / `style.css` / `app.js` | Frontend (3 temas, workspaces, cards) |
+| `tests/` | 142 testes (unitários + integração HTTP) — `python -m pytest` |
 
-| Componente | Versão | Notas |
-|---|---|---|
-| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | v4.0+ | Obrigatório para setup com Docker |
-| [Ollama](https://ollama.com/) | v0.18+ | Deve estar a correr no host |
-| [ngrok](https://ngrok.com/) | v3.37+ | Conta gratuita — 1 tunnel por vez |
-| Token GitLab | `glpat-...` | Scopes: `api`, `read_api` |
-| Python | 3.11+ | Apenas sem Docker |
+## Deploy (uma vez)
 
----
+1. **Cria uma chave Groq** (grátis, sem cartão): https://console.groq.com/keys
+2. **Cria um Space**: huggingface.co → New → Space → **Docker** (Blank), visibilidade *Public*.
+3. **Envia estes ficheiros** para o Space (git push ou upload):
+   `Dockerfile`, **todos os `.py` da raiz** (`server.py`, `config.py`,
+   `gitlab_api.py`, `analytics.py`, `report.py`, `charts.py`, `blame.py`,
+   `code_commit.py`, `actions.py`, `llm.py`), `chatbox.html`, `style.css`,
+   `app.js`, `README.md`, `requirements.txt`. (A pasta `tests/` não é preciso enviar.)
+4. **Define os Secrets** em *Settings → Variables and secrets*:
+   - `GROQ_API_KEY` = `gsk_...`
+   - `GITLAB_TOKEN` = `glpat-...`
+   - (opcional) `GITLAB_PROJECT_ID`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`
+5. O Space faz **build** e arranca sozinho. Quando ficar *Running*, o chatbox está em
+   `https://<user>-<space>.hf.space`.
 
-## Instalação — Setup com Docker (recomendado)
+## Ligar ao Teams
 
-### 1. Instalar o modelo Ollama
+Aponta o `manifest.json` para o URL do Space (host = `<user>-<space>.hf.space`).
+Podes reutilizar o `package.ps1` da pasta `chatbox/`:
 
 ```powershell
-ollama pull qwen2.5:7b
+.\teams-package\package.ps1 -NgrokHost "bernardo-sprintlab.hf.space"
 ```
 
-> **Nota Windows:** O Ollama deve estar a correr no host antes de iniciar o Docker. Verifica com `ollama list`.
+Como o URL do Space **não muda**, fazes isto **uma única vez** — nunca mais mexes no Teams.
 
-### 2. Clonar o repositório
+## Variáveis de ambiente
+
+| Variável | Obrigatória | Default | Notas |
+|---|---|---|---|
+| `GROQ_API_KEY` | sim | — | Chave Groq (`gsk_...`) |
+| `GITLAB_TOKEN` | sim | — | Token GitLab (`glpat-...`) |
+| `GITLAB_PROJECT_ID` | não | `80767095` | ID do projeto GitLab |
+| `GROQ_MODEL` | não | `llama-3.3-70b-versatile` | Tool calling fiável. Alt.: `qwen/qwen3-32b` (+ `GROQ_REASONING_EFFORT=none`) |
+| `GROQ_REASONING_EFFORT` | não | `""` (vazio) | Vazio para Llama. Para Qwen3 põe `none` (respostas diretas, sem `<think>`) |
+| `CACHE_TTL` | não | `45` | Segundos de cache das chamadas GitLab |
+| `GITLAB_PAGE_LIMIT` | não | `5` | Máx. páginas (×100 issues) |
+| `RATE_LIMIT` | não | `20` | Pedidos/min por IP nos endpoints que usam o Groq (0 = desligado) |
+| `README_MAX` | não | `1500` | Caracteres do excerto do README no contexto do LLM |
+
+> O `GROQ_REASONING_EFFORT` só se aplica a modelos *reasoning* (ex. Qwen3). Com o
+> default Llama deixa-o vazio — senão o Groq rejeita o parâmetro.
+
+## Correr localmente (dev)
 
 ```powershell
-git clone https://github.com/DEISI-ULHT-TFC-2025-26/TFC-DEISI2192-Sprintlab-Chatbot.git
-cd TFC-DEISI2192-Sprintlab-Chatbot
-```
-
-### 3. Criar o ficheiro `.env`
-
-Cria `.env` na raiz do projeto (nunca commites este ficheiro):
-
-```env
-# GitLab
-GITLAB_TOKEN=glpat-SEU_TOKEN_AQUI
-GITLAB_PROJECT_ID=80767095
-
-# Middleware Express
-DATABASE_URL=postgresql://user:pass@host:5432/db
-```
-
-> Para obter o token: **GitLab → Foto → Edit Profile → Access Tokens → Add new token** (scopes: `api`, `read_api`)
-
-### 4. Construir e iniciar com Docker
-
-```powershell
-# Primeira vez (constrói as imagens)
-docker-compose up --build -d
-
-# Ver logs do chatbox em tempo real
-docker-compose logs -f chatbox
-
-# Parar
-docker-compose down
-```
-
-### 5. Expor com ngrok
-
-```powershell
-ngrok http 8080
-```
-
-Copia o URL público (ex: `https://xxxx.ngrok-free.app`).
-
-> **Importante:** Se o URL do ngrok mudar, tens de atualizar o `manifest.json` e recarregar o zip no Teams.
-
-### 6. Testar no browser
-
-Abre `https://SEU-URL.ngrok-free.app` — deves ver o chatbox.
-
----
-
-## Instalação — Sem Docker (desenvolvimento local)
-
-Abre **3 terminais separados**:
-
-```powershell
-# Terminal 1 — Ollama (se não estiver já a correr)
-ollama serve
-
-# Terminal 2 — server.py
-cd chatbox
+$env:GROQ_API_KEY="gsk_..."
+$env:GITLAB_TOKEN="glpat-..."
+$env:PORT="8080"
 python server.py
-
-# Terminal 3 — ngrok
-ngrok http 8080
+# abre http://localhost:8080
 ```
 
-> O `server.py` lê as variáveis de ambiente do `.env` ou podes definir diretamente:
-> ```powershell
-> $env:GITLAB_TOKEN = "glpat-SEU_TOKEN"
-> $env:GITLAB_PROJECT_ID = "80767095"
-> python server.py
-> ```
+## Notas
 
----
+- Limites do free tier Groq são **por modelo** (cada modelo tem a sua quota de
+  req/min e tokens/min) — se um modelo atingir o limite, troca de modelo nas
+  definições (⚙️) e continuas com quota fresca. O servidor também aplica um
+  rate-limit por IP (`RATE_LIMIT`) para um único cliente não esgotar a quota.
+- O Space adormece após ~48h sem tráfego; o primeiro pedido a seguir tem um arranque curto.
+- Segredos nunca ficam no repositório — só nos Secrets do Space.
+- Workspaces e conversas vivem no `localStorage` do browser; usa os botões
+  **Backup / Repor** (rodapé da barra lateral) para os levar para outro browser.
 
-## Comandos do Chatbox
+## Testes
 
-### Perguntas sobre o documento TFC
-
-| Comando | Resultado |
-|---|---|
-| `O que é o SprintLab?` | Resposta baseada no relatório intercalar |
-| `Que tecnologias são usadas?` | Lista de tecnologias do projeto |
-| `O que diz o benchmarking?` | Comparação com concorrentes |
-| `Quais os resultados do inquérito de viabilidade?` | Dados do inquérito (85%, 70%, 90%) |
-
-### Queries ao GitLab (tempo real)
-
-| Comando | Resultado |
-|---|---|
-| `Quantas issues estão abertas?` | Número real do GitLab (todas as páginas) |
-| `Qual o progresso do sprint?` | % de issues fechadas vs total |
-| `Quem tem mais issues atribuídas?` | Ranking por assignee |
-| `Há issues em atraso?` | Lista com due_date ultrapassado |
-| `Qual a issue mais antiga?` | Issue com created_at mais antigo |
-| `Faz um resumo do projeto` | Métricas completas |
-
-### CRUD de Issues
-
-| Comando | Resultado |
-|---|---|
-| `Cria uma issue com o título 'X'` | Issue criada no GitLab |
-| `Cria issue: X` | Alternativa mais curta |
-| `Fecha a issue #5` | Issue fechada no GitLab |
-| `Muda o título da issue #2 para 'X'` | Título atualizado |
-
-> Podes criar issues com mais detalhe numa só mensagem:
-> ```
-> Cria issue: Implementar autenticação OAuth2
-> Descrição: Adicionar OAuth2 ao middleware Express
-> Due date: 2025-10-31
-> ```
-
-### Exportação
-
-| Comando | Resultado |
-|---|---|
-| `Exporta todas as issues para CSV` | Download `gitlab_issues.csv` (todas) |
-| `Exporta as issues abertas para CSV` | Só issues abertas |
-| `Exporta as issues fechadas para CSV` | Só issues fechadas |
-
----
-
-## Comandos Docker úteis
-
-```powershell
-# Ver estado dos containers
-docker-compose ps
-
-# Reiniciar só o chatbox (após alterar server.py)
-docker-compose restart chatbox
-
-# Ver logs em tempo real
-docker-compose logs -f chatbox
-
-# Reconstruir após mudanças no Dockerfile
-docker-compose up --build -d
-
-# Parar e remover containers
-docker-compose down
-
-# Ver uso de recursos
-docker stats
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest        # 142 testes: unitários + integração HTTP (sem rede)
 ```
-
----
-
-## Resolução de Problemas
-
-| Problema | Solução |
-|---|---|
-| `Erro ao ligar ao modelo` | Verifica se o Ollama está a correr: `ollama list` |
-| `HTTP 403 GitLab` | Token inválido — cria novo em gitlab.com/profile/tokens |
-| `ERR_NGROK_334` | Fecha o tunnel em dashboard.ngrok.com/tunnels |
-| `port already in use` | `docker-compose down` e depois `up -d` |
-| Issues incompletas | Garante que usas o `server.py` mais recente (paginação activa) |
-| Chatbox não carrega no Teams | URL do ngrok desatualizado no `manifest.json` |
-
----
-
-## Estrutura do Projeto com o SprintLab
-
-```
-bernardogouveia-tfc/
-├── chatbox/
-│   ├── chatbox.html          # Interface do chatbox (streaming, detecção de intenções)
-│   ├── server.py             # Servidor Python — proxy Ollama + CRUD GitLab + CSV
-│   └── Dockerfile.chatbox    # Imagem Docker do chatbox
-├── tabs/
-│   ├── board.html            # Kanban board sincronizado com GitLab
-│   ├── dashboard.html        # Dashboard / Gráfico de Gantt
-│   └── main.html             # Shell principal com tabs
-├── routes/
-│   ├── gitlab.js             # API GitLab — issues, boards, milestones
-│   ├── gitlab_dashboard.js   # Dados para o Gantt
-│   ├── teams.js              # Verificação de roles Teams
-│   └── webhooks.js           # Receção de webhooks GitLab
-├── services/
-│   └── db.js                 # Pool PostgreSQL
-├── server.js                 # Middleware Express principal
-├── Dockerfile                # Imagem Docker do middleware Express
-├── docker-compose.yml        # Orquestração completa (chatbox + middleware)
-├── .env                      # Variáveis de ambiente — NÃO commitar!
-├── .gitignore                # Deve incluir .env
-└── README.md                 # Este ficheiro
-```
-
----
-
-## Tecnologias
-
-| Tecnologia | Versão | Função |
-|---|---|---|
-| Express.js | v4 | Middleware backend — APIs RESTful, webhooks |
-| Microsoft Teams API | v2.12 | Plugin Teams — Kanban, Gantt, Chatbox |
-| GitLab API | v4 | Issues, milestones, labels, webhooks |
-| Ollama + qwen2.5:7b | v0.18+ / 4.7GB | Modelo LLM local — NLP em português |
-| Python | 3.11 | Servidor do chatbox (server.py) |
-| PostgreSQL | — | Base de dados de configurações por canal |
-| Docker | v4+ | Containerização do chatbox e middleware |
-| ngrok | v3.37+ | Tunnel HTTPS para exposição local |
-
----
-
-## Autor
-
-**Bernardo Gouveia** — Universidade Lusófona, LEI, 2025/2026  
-Orientador: Daniel Silveira  
-Repositório: [gitlab.com/BernardoGouveia/bernardogouveia-tfc](https://gitlab.com/BernardoGouveia/bernardogouveia-tfc)
